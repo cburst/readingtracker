@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fullscreen Reading Tracker v16</title>
+<style>
+  body {
+    margin: 0;
+    background-color: #f8f8f5;
+    color: #000;
+    font-family: Georgia, "Times New Roman", serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  #setup {
+    width: 90%;
+    max-width: 800px;
+    text-align: center;
+  }
+  textarea {
+    width: 100%;
+    margin-top: 0.5em;
+    padding: 0.8em;
+    font-size: 1em;
+    border-radius: 12px;
+    border: 1px solid #ccc;
+    resize: vertical;
+    background-color: #fff;
+    color: #000;
+  }
+  #startBtn, #stopBtn {
+    padding: 0.8em 1.4em;
+    font-size: 1.2em;
+    cursor: pointer;
+    border: none;
+    border-radius: 12px;
+  }
+  #startBtn {
+    background-color: #4CAF50;
+    color: white;
+    margin-top: 1em;
+  }
+  #stopBtn {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: #d33;
+    color: white;
+    z-index: 9999;
+  }
+  #container {
+    display: none;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: left;
+  }
+  #textBlock {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    width: 90%;
+  }
+  .sentence {
+    display: block;
+    margin: 0.2em 0;
+    text-align: left;
+  }
+</style>
+<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+</head>
+<body>
+<div id="setup">
+  <h1>Reading Tracker</h1>
+  <textarea id="passageInput" rows="10" placeholder="Paste your text here..."></textarea>
+  <br>
+  <button id="startBtn">Start</button>
+</div>
+
+<div id="container">
+  <div id="textBlock"></div>
+</div>
+<button id="stopBtn" style="display:none;">Stop</button>
+
+<script>
+let sentencesArr = [];
+let dwellTimes = [];
+let startTime;
+let totalSentences = 0;
+let viewportW = window.innerWidth;
+let viewportH = window.innerHeight;
+
+const abbreviations = ["Mr.", "Mrs.", "Ms.", "Dr.", "Prof.", "Sr.", "Jr.", "vs.", "e.g.", "i.e.", "etc."];
+
+// Split into sentences considering abbreviations
+function splitIntoSentences(text) {
+  const regex = /([.?!])\s+(?=[A-Z])/g;
+  let rawSentences = text.replace(regex, (match, p1, offset, string) => {
+    let prevWordMatch = string.substring(0, offset).split(/\s+/).pop();
+    if (abbreviations.includes(prevWordMatch + p1)) {
+      return p1 + " ";
+    } else {
+      return p1 + "|SPLIT|";
+    }
+  }).split("|SPLIT|").map(s => s.trim()).filter(s => s.length > 0);
+  return rawSentences;
+}
+
+function applyPassage(text) {
+  sentencesArr = splitIntoSentences(text);
+  totalSentences = sentencesArr.length;
+  const textBlock = document.getElementById('textBlock');
+  textBlock.innerHTML = '';
+  sentencesArr.forEach((sentence, i) => {
+    const div = document.createElement('div');
+    div.className = 'sentence';
+    div.dataset.index = i;
+    div.textContent = sentence;
+    textBlock.appendChild(div);
+  });
+  dwellTimes = Array(totalSentences).fill(0);
+  autoScaleFont();
+}
+
+function requestFullScreen(elem) {
+  if (elem.requestFullscreen) elem.requestFullscreen();
+  else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
+  else if (elem.msRequestFullscreen) elem.msRequestFullscreen();
+}
+
+function exitFullScreen() {
+  if (document.exitFullscreen) document.exitFullscreen();
+  else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  else if (document.msExitFullscreen) document.msExitFullscreen();
+}
+
+function startTracking() {
+  startTime = new Date();
+  webgazer.setGazeListener((data) => {
+    if (!data) return;
+    let x = data.x, y = data.y;
+    const elem = document.elementFromPoint(x, y);
+    if (elem && elem.classList.contains('sentence')) {
+      let idx = parseInt(elem.dataset.index);
+      if (!isNaN(idx)) {
+        dwellTimes[idx] += 0.1;
+      }
+    }
+  }).begin();
+}
+
+function stopTracking() {
+  webgazer.pause();
+}
+
+function csvEscape(val) {
+  if (typeof val === 'string') {
+    let escaped = val.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
+  return val;
+}
+
+function downloadCSV() {
+  let finished = new Date();
+  let lines = [];
+  lines.push(['sentence_index','sentence_text','word_count','dwell_seconds','wpm'].join(','));
+  sentencesArr.forEach((sentence, i) => {
+    let words = sentence.split(/\s+/).filter(w=>w.length>0).length;
+    let dwell = dwellTimes[i].toFixed(2);
+    let wpm = dwell > 0 ? (words / (dwell/60)).toFixed(2) : "0";
+    lines.push([i+1, csvEscape(sentence), words, dwell, wpm].join(','));
+  });
+  let csvContent = "\uFEFF" + lines.join("\r\n"); // UTF-8 BOM + CRLF
+  let blob = new Blob([csvContent], {type: 'text/csv;charset=utf-8;'});
+  let url = URL.createObjectURL(blob);
+  let a = document.createElement('a');
+  a.href = url;
+  a.download = 'reading_sentences.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// Fit font size so all sentences fit vertically
+function autoScaleFont() {
+  const textBlock = document.getElementById('textBlock');
+  let fontSize = 100;
+  textBlock.style.fontSize = fontSize + "px";
+  let fits = false;
+  while (!fits && fontSize > 5) {
+    let blockRect = textBlock.getBoundingClientRect();
+    if (blockRect.height <= window.innerHeight * 0.9) {
+      fits = true;
+    } else {
+      fontSize -= 1;
+      textBlock.style.fontSize = fontSize + "px";
+    }
+  }
+}
+
+window.onload = function() {
+  webgazer.begin();
+  webgazer.showVideoPreview(false).showPredictionPoints(true);
+};
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  let text = document.getElementById('passageInput').value;
+  applyPassage(text);
+  document.getElementById('setup').style.display = 'none';
+  document.getElementById('container').style.display = 'flex';
+  document.getElementById('stopBtn').style.display = 'block';
+  requestFullScreen(document.documentElement);
+  startTracking();
+});
+
+document.getElementById('stopBtn').addEventListener('click', () => {
+  stopTracking();
+  exitFullScreen();
+  downloadCSV();
+});
+</script>
+</body>
+</html>

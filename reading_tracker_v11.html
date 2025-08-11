@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fullscreen Reading Tracker v11</title>
+<style>
+  body {
+    margin: 0;
+    background-color: #f8f8f5;
+    color: #000;
+    font-family: Georgia, "Times New Roman", serif;
+  }
+  #container {
+    max-width: 900px;
+    margin: auto;
+    padding: 2vh 4vw;
+    line-height: 1.6;
+  }
+  .sentence {
+    display: block;
+    margin-bottom: 1em;
+  }
+  #startBtn, #stopBtn {
+    padding: 0.6em 1.2em;
+    font-size: 1.2em;
+    cursor: pointer;
+  }
+  #stopBtn {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: #d33;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    z-index: 9999;
+  }
+</style>
+<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+</head>
+<body>
+<div id="setup">
+  <h1>Reading Tracker</h1>
+  <textarea id="passageInput" rows="10" style="width: 100%;" placeholder="Paste your text here..."></textarea><br><br>
+  <input type="text" id="participantId" placeholder="Participant ID">
+  <input type="text" id="passageSource" placeholder="Passage Source">
+  <br><br>
+  <button id="startBtn">Start</button>
+</div>
+
+<div id="container" style="display:none;"></div>
+<button id="stopBtn" style="display:none;">Stop</button>
+
+<script>
+let sentences = [];
+let dwellTimes = [];
+let gazeInterval;
+let startTime;
+let totalSentences = 0;
+let viewportW = window.innerWidth;
+let viewportH = window.innerHeight;
+
+// Sentence splitting regex
+function splitSentences(text) {
+  const regex = /([^.!?]+[.!?])(\s+(?=[A-Z]))?/g;
+  let result = [];
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    let sentence = match[1].trim();
+    if (sentence.length > 0) result.push(sentence);
+  }
+  return result;
+}
+
+function applyPassage(text) {
+  sentences = splitSentences(text);
+  totalSentences = sentences.length;
+  const container = document.getElementById('container');
+  container.innerHTML = '';
+  sentences.forEach((s, i) => {
+    const span = document.createElement('span');
+    span.className = 'sentence';
+    span.dataset.index = i;
+    span.textContent = s;
+    container.appendChild(span);
+  });
+  dwellTimes = Array(totalSentences).fill(0);
+}
+
+function requestFullScreen(elem) {
+  if (elem.requestFullscreen) elem.requestFullscreen();
+  else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
+  else if (elem.msRequestFullscreen) elem.msRequestFullscreen();
+}
+
+function exitFullScreen() {
+  if (document.exitFullscreen) document.exitFullscreen();
+  else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  else if (document.msExitFullscreen) document.msExitFullscreen();
+}
+
+function startTracking() {
+  startTime = new Date();
+  webgazer.setGazeListener((data, elapsedTime) => {
+    if (!data) return;
+    let x = data.x, y = data.y;
+    const elem = document.elementFromPoint(x, y);
+    if (elem && elem.classList.contains('sentence')) {
+      let idx = parseInt(elem.dataset.index);
+      if (!isNaN(idx)) {
+        dwellTimes[idx] += 0.1;
+      }
+    }
+  }).begin();
+  gazeInterval = setInterval(() => {}, 100);
+}
+
+function stopTracking() {
+  clearInterval(gazeInterval);
+  webgazer.pause();
+}
+
+function downloadCSV() {
+  let participantId = document.getElementById('participantId').value;
+  let passageSource = document.getElementById('passageSource').value;
+  let finished = new Date();
+  let lines = [];
+  lines.push('\uFEFFsep=,');
+  lines.push(['participant_id','passage_source','sentence_index','sentence_text','words_in_sentence','dwell_seconds','wpm','viewport_w','viewport_h','started_iso','finished_iso','total_sentences'].join(','));
+  sentences.forEach((s, i) => {
+    let words = s.split(/\s+/).filter(w=>w.length>0).length;
+    let dwell = dwellTimes[i].toFixed(2);
+    let wpm = dwell > 0 ? (words / (dwell/60)).toFixed(2) : "0";
+    lines.push([participantId, passageSource, i+1, '"' + s.replace(/"/g,'""') + '"', words, dwell, wpm, viewportW, viewportH, startTime.toISOString(), finished.toISOString(), totalSentences].join(','));
+  });
+  let csvContent = lines.join('\r\n');
+  let blob = new Blob([csvContent], {type: 'text/csv;charset=utf-8;'});
+  let url = URL.createObjectURL(blob);
+  let a = document.createElement('a');
+  a.href = url;
+  a.download = 'reading_sentences.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  let text = document.getElementById('passageInput').value;
+  applyPassage(text);
+  document.getElementById('setup').style.display = 'none';
+  document.getElementById('container').style.display = 'block';
+  document.getElementById('stopBtn').style.display = 'block';
+  requestFullScreen(document.documentElement);
+  startTracking();
+});
+
+document.getElementById('stopBtn').addEventListener('click', () => {
+  stopTracking();
+  exitFullScreen();
+  downloadCSV();
+});
+</script>
+</body>
+</html>
