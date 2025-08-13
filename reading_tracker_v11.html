@@ -1,165 +1,266 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fullscreen Reading Tracker v11</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Reading Tracker (Gaze, Preview Toggle)</title>
 <style>
-  body {
-    margin: 0;
-    background-color: #f8f8f5;
-    color: #000;
-    font-family: Georgia, "Times New Roman", serif;
-  }
-  #container {
-    max-width: 900px;
-    margin: auto;
-    padding: 2vh 4vw;
-    line-height: 1.6;
-  }
-  .sentence {
-    display: block;
-    margin-bottom: 1em;
-  }
-  #startBtn, #stopBtn {
-    padding: 0.6em 1.2em;
-    font-size: 1.2em;
-    cursor: pointer;
-  }
-  #stopBtn {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background-color: #d33;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    z-index: 9999;
-  }
+  :root { --bg:#ffffff; --text:#000; --muted:#555; --primary:#007bff; --card:#fafafa; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+  .screen { display:none; min-height:100%; display:flex; align-items:center; justify-content:center; }
+  .wrap { width:min(720px,92vw); background:var(--card); border:1px solid #eee;
+    border-radius:16px; padding:24px; box-shadow:0 10px 30px rgba(0,0,0,.08); }
+  h1 { margin:0 0 12px; font-size:1.4rem; }
+  p { margin:.2rem 0 .8rem; color:var(--muted); }
+  textarea { width:100%; min-height:160px; padding:12px 14px; font-size:16px;
+    border:1px solid #ccc; border-radius:10px; background:#fff; color:#000; }
+  input[type=text]{ width:100%; padding:12px 14px; font-size:16px; border:1px solid #ccc; border-radius:10px; background:#fff; color:#000; }
+  button { border:none; border-radius:12px; padding:14px 16px; font-size:16px; cursor:pointer; font-weight:600; }
+  .btn-start { background:#007bff; color:#fff; width:300px; font-size:1.6rem; padding:18px 0; }
+  .btn-level { background:#4CAF50; color:#fff; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .mt { margin-top:12px; }
+
+  /* Reader */
+  #reader { display:none; }
+  #container { max-width:900px; margin:auto; padding:2vh 4vw; line-height:1.6; }
+  .sentence { display:block; margin-bottom:1em; } /* no highlighting */
+  #finishBtn { position:fixed; bottom:20px; right:20px; background:#ff8800; color:#fff; border:none;
+    border-radius:12px; padding:16px 22px; font-size:1.1rem; z-index:9999; }
+
+  /* tiny helper for radios line */
+  .start-controls { display:flex; gap:14px; align-items:center; justify-content:center; flex-wrap:wrap; margin-top:12px; }
+  .radio-group { display:flex; gap:10px; align-items:center; }
+  label { font-size:.95rem; color:#333; }
 </style>
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
 </head>
 <body>
-<div id="setup">
-  <h1>Reading Tracker</h1>
-  <textarea id="passageInput" rows="10" style="width: 100%;" placeholder="Paste your text here..."></textarea><br><br>
-  <input type="text" id="participantId" placeholder="Participant ID">
-  <input type="text" id="passageSource" placeholder="Passage Source">
-  <br><br>
-  <button id="startBtn">Start</button>
+
+<!-- START SCREEN -->
+<div id="startScreen" class="screen" style="display:flex">
+  <div class="wrap">
+    <h1>Reading Tracker</h1>
+    <p>Paste a reading passage below. This app logs dwell time per sentence using eye-tracking.</p>
+    <div class="row">
+      <textarea id="passageInput" placeholder="Paste your text here..."></textarea>
+    </div>
+
+    <!-- Student # + Level buttons -->
+    <div class="row mt">
+      <input id="studentId" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Student # (optional)" style="flex:1;" />
+      <button class="btn-level" data-level="A1" type="button">A1</button>
+      <button class="btn-level" data-level="A2" type="button">A2</button>
+      <button class="btn-level" data-level="B1" type="button">B1</button>
+      <button class="btn-level" data-level="B2" type="button">B2</button>
+      <button class="btn-level" data-level="C1" type="button">C1</button>
+      <button class="btn-level" data-level="C2" type="button">C2</button>
+    </div>
+
+    <!-- Start + preview radios -->
+    <div class="start-controls">
+      <div class="radio-group" aria-label="Camera preview">
+        <label><input type="radio" name="preview" value="on"> Preview On</label>
+        <label><input type="radio" name="preview" value="off" checked> Preview Off</label>
+      </div>
+      <button id="startBtn" class="btn-start" disabled>Start</button>
+    </div>
+  </div>
 </div>
 
-<div id="container" style="display:none;"></div>
-<button id="stopBtn" style="display:none;">Stop</button>
+<!-- READER SCREEN -->
+<div id="reader">
+  <div id="container"></div>
+  <button id="finishBtn" style="display:none;">Finish</button>
+</div>
 
 <script>
-let sentences = [];
-let dwellTimes = [];
-let gazeInterval;
-let startTime;
-let totalSentences = 0;
-let viewportW = window.innerWidth;
-let viewportH = window.innerHeight;
-
-// Sentence splitting regex
-function splitSentences(text) {
-  const regex = /([^.!?]+[.!?])(\s+(?=[A-Z]))?/g;
-  let result = [];
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    let sentence = match[1].trim();
-    if (sentence.length > 0) result.push(sentence);
-  }
-  return result;
-}
-
-function applyPassage(text) {
-  sentences = splitSentences(text);
-  totalSentences = sentences.length;
-  const container = document.getElementById('container');
-  container.innerHTML = '';
-  sentences.forEach((s, i) => {
-    const span = document.createElement('span');
-    span.className = 'sentence';
-    span.dataset.index = i;
-    span.textContent = s;
-    container.appendChild(span);
-  });
-  dwellTimes = Array(totalSentences).fill(0);
-}
-
-function requestFullScreen(elem) {
-  if (elem.requestFullscreen) elem.requestFullscreen();
-  else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
-  else if (elem.msRequestFullscreen) elem.msRequestFullscreen();
-}
-
-function exitFullScreen() {
-  if (document.exitFullscreen) document.exitFullscreen();
-  else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-  else if (document.msExitFullscreen) document.msExitFullscreen();
-}
-
-function startTracking() {
-  startTime = new Date();
-  webgazer.setGazeListener((data, elapsedTime) => {
-    if (!data) return;
-    let x = data.x, y = data.y;
-    const elem = document.elementFromPoint(x, y);
-    if (elem && elem.classList.contains('sentence')) {
-      let idx = parseInt(elem.dataset.index);
-      if (!isNaN(idx)) {
-        dwellTimes[idx] += 0.1;
+/* ---------- Sentence splitting (simple + stable) ---------- */
+function splitSentences(text){
+  // Keep it simple: split on . ? ! followed by space + capital, but keep punctuation.
+  text = (text||'').replace(/\r\n/g,'\n').replace(/\n+/g,' ').replace(/[ \t\f\v]+/g,' ').trim();
+  const out=[]; let i=0, start=0;
+  while(i<text.length){
+    const ch=text[i];
+    if(ch==='.'||ch==='?'||ch==='!'){
+      // look ahead for space + capital (or end)
+      let h=i+1; while(h<text.length && text[h]===' ') h++;
+      const nextIsCap = h>=text.length || /[A-Z]/.test(text[h]);
+      if(nextIsCap){
+        const sent=text.slice(start, i+1).trim(); if(sent) out.push(sent);
+        i=h; start=i; continue;
       }
     }
-  }).begin();
-  gazeInterval = setInterval(() => {}, 100);
+    i++;
+  }
+  const tail=text.slice(start).trim(); if(tail) out.push(tail);
+  return out;
 }
 
-function stopTracking() {
-  clearInterval(gazeInterval);
-  webgazer.pause();
+/* ---------- CSV helpers ---------- */
+function csvEscape(v){ const s=String(v ?? ""); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; }
+function formatStamp(ms){
+  const d=new Date(ms), pad=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
-function downloadCSV() {
-  let participantId = document.getElementById('participantId').value;
-  let passageSource = document.getElementById('passageSource').value;
-  let finished = new Date();
-  let lines = [];
-  lines.push('\uFEFFsep=,');
-  lines.push(['participant_id','passage_source','sentence_index','sentence_text','words_in_sentence','dwell_seconds','wpm','viewport_w','viewport_h','started_iso','finished_iso','total_sentences'].join(','));
-  sentences.forEach((s, i) => {
-    let words = s.split(/\s+/).filter(w=>w.length>0).length;
-    let dwell = dwellTimes[i].toFixed(2);
-    let wpm = dwell > 0 ? (words / (dwell/60)).toFixed(2) : "0";
-    lines.push([participantId, passageSource, i+1, '"' + s.replace(/"/g,'""') + '"', words, dwell, wpm, viewportW, viewportH, startTime.toISOString(), finished.toISOString(), totalSentences].join(','));
+/* ---------- App state ---------- */
+let sentences=[], dwell=[], lastGaze=null, tickTimer=null;
+let startedAtMs=null, finishedAtMs=null, studentTag='';
+let previewOn=false;
+
+/* ---------- DOM ---------- */
+const startScreen = document.getElementById('startScreen');
+const reader = document.getElementById('reader');
+const container = document.getElementById('container');
+const startBtn = document.getElementById('startBtn');
+const finishBtn = document.getElementById('finishBtn');
+const passageInput = document.getElementById('passageInput');
+
+/* ---------- Start screen behavior ---------- */
+function refreshStartDisabled(){
+  startBtn.disabled = passageInput.value.trim().length===0;
+}
+passageInput.addEventListener('input', refreshStartDisabled);
+
+const LEVEL_PLACEHOLDERS = {
+  A1:'PLACEHOLDER-A1', A2:'PLACEHOLDER-A2',
+  B1:'PLACEHOLDER-B1', B2:'PLACEHOLDER-B2',
+  C1:'PLACEHOLDER-C1', C2:'PLACEHOLDER-C2'
+};
+document.querySelectorAll('.btn-level').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const lv = btn.getAttribute('data-level');
+    passageInput.value = LEVEL_PLACEHOLDERS[lv] || '';
+    passageInput.focus();
+    refreshStartDisabled();
   });
-  let csvContent = lines.join('\r\n');
-  let blob = new Blob([csvContent], {type: 'text/csv;charset=utf-8;'});
-  let url = URL.createObjectURL(blob);
-  let a = document.createElement('a');
-  a.href = url;
-  a.download = 'reading_sentences.csv';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}
-
-document.getElementById('startBtn').addEventListener('click', () => {
-  let text = document.getElementById('passageInput').value;
-  applyPassage(text);
-  document.getElementById('setup').style.display = 'none';
-  document.getElementById('container').style.display = 'block';
-  document.getElementById('stopBtn').style.display = 'block';
-  requestFullScreen(document.documentElement);
-  startTracking();
 });
 
-document.getElementById('stopBtn').addEventListener('click', () => {
-  stopTracking();
-  exitFullScreen();
+document.querySelectorAll('input[name="preview"]').forEach(r=>{
+  r.addEventListener('change', ()=>{ previewOn = (r.value==='on'); });
+  if(r.checked) previewOn = (r.value==='on');
+});
+
+/* ---------- Render passage (no highlighting) ---------- */
+function applyPassage(text){
+  sentences = splitSentences(text);
+  container.innerHTML='';
+  sentences.forEach((s,i)=>{
+    const span=document.createElement('span');
+    span.className='sentence';
+    span.dataset.index=i;
+    span.textContent=s;
+    container.appendChild(span);
+  });
+  dwell = Array(sentences.length).fill(0);
+}
+
+/* ---------- WebGazer setup ---------- */
+function setupWebgazer(){
+  // Keep prediction dot ON. Toggle camera preview.
+  webgazer.showVideo(previewOn);
+  webgazer.showPredictionPoints(true);
+  // Optional: turn off the face feedback box for a cleaner UI
+  if (webgazer.showFaceFeedbackBox) webgazer.showFaceFeedbackBox(false);
+
+  // Track last gaze point; we'll sample at 10Hz
+  webgazer.setGazeListener((data)=>{
+    if(!data) return;
+    lastGaze = { x:data.x, y:data.y };
+  }).begin();
+}
+
+/* ---------- Dwell accumulation loop ---------- */
+function startTicking(){
+  const intervalMs = 100; // 10 Hz
+  tickTimer = setInterval(()=>{
+    if(!lastGaze) return;
+    const x = lastGaze.x, y = lastGaze.y;
+    const el = document.elementFromPoint(x, y);
+    if(el && el.classList && el.classList.contains('sentence')){
+      const idx = parseInt(el.dataset.index, 10);
+      if(Number.isInteger(idx)) dwell[idx] += intervalMs/1000;
+    }
+  }, intervalMs);
+}
+function stopTicking(){
+  clearInterval(tickTimer);
+  tickTimer = null;
+}
+
+/* ---------- Start / Finish ---------- */
+startBtn.addEventListener('click', async ()=>{
+  const text = passageInput.value.trim();
+  if(!text){ alert('Please paste a passage or choose a level.'); return; }
+
+  // Student tag (Student # or timestamp)
+  const entered = (document.getElementById('studentId').value || '').trim();
+  startedAtMs = Date.now();
+  studentTag = entered || formatStamp(startedAtMs);
+
+  applyPassage(text);
+  startScreen.style.display='none';
+  reader.style.display='block';
+  finishBtn.style.display='inline-block';
+
+  setupWebgazer();
+  startTicking();
+
+  // Try fullscreen for focus (best-effort)
+  const de = document.documentElement;
+  if(de.requestFullscreen) de.requestFullscreen();
+});
+
+finishBtn.addEventListener('click', ()=>{
+  finishedAtMs = Date.now();
+  stopTicking();
+  if(webgazer && webgazer.pause) webgazer.pause();
+  if(document.exitFullscreen) document.exitFullscreen();
   downloadCSV();
 });
+
+/* ---------- CSV ---------- */
+function wordsIn(s){ return (s.match(/\S+/g)||[]).length; }
+
+function downloadCSV(){
+  const rows = [];
+  for(let i=0;i<sentences.length;i++){
+    const text = sentences[i];
+    const words = wordsIn(text);
+    const dwellSec = dwell[i] || 0;
+    const wpm = dwellSec>0 ? (words / (dwellSec/60)) : 0;
+    rows.push({ index:i+1, text, words, dwell:dwellSec, wpm });
+  }
+
+  // Build CSV with overall row (averages; weighted WPM)
+  const header = ['student_number','sentence_index','sentence_text','word_count','dwell_seconds','wpm'];
+  const lines = [header.join(',')];
+
+  rows.forEach(r=>{
+    lines.push([ csvEscape(studentTag), r.index, csvEscape(r.text),
+                 r.words, r.dwell.toFixed(2), r.wpm.toFixed(2) ].join(','));
+  });
+
+  const totalWords = rows.reduce((s,r)=>s+r.words,0);
+  const totalDwell = rows.reduce((s,r)=>s+r.dwell,0);
+  const avgWords = rows.length ? totalWords/rows.length : 0;
+  const avgDwell = rows.length ? totalDwell/rows.length : 0;
+  const weightedWpm = totalDwell>0 ? (totalWords/(totalDwell/60)) : 0;
+
+  lines.push([ csvEscape(studentTag), '', csvEscape('overall'),
+               avgWords.toFixed(2), avgDwell.toFixed(2), weightedWpm.toFixed(2) ].join(','));
+
+  const csv = '\uFEFF' + lines.join('\r\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=`eyetrackedreading_${studentTag}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+/* ---------- init ---------- */
+refreshStartDisabled();
 </script>
 </body>
 </html>
