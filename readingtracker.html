@@ -214,37 +214,86 @@
 
 
 <script>
-// ====== Sentence splitting with robust rules ======
+// ====== Sentence splitting — adaptive (capital vs non-capital languages) ======
 const ABBREV = ["Mr.","Mrs.","Ms.","Dr.","Prof.","Sr.","Jr.","vs.","e.g.","i.e.","etc."];
 const OPENERS = ['"', "'", "“", "”", "‘", "’", "(", "[", "{"];
 
 function isOpener(ch){ return OPENERS.includes(ch); }
 
+// Detect whether the text statistically uses capitalized sentence starts
+function detectCapitalSentenceStyle(text) {
+  const hits = text.match(/[.!?]\s+["'“”‘’(\[]?[A-Za-z]/g) || [];
+  if (hits.length < 3) return false; // not enough evidence
+  const caps = hits.filter(m => /[A-Z]/.test(m.slice(-1))).length;
+  return (caps / hits.length) > 0.6;
+}
+
 function splitIntoSentences(text){
-  text = (text||'').replace(/\r\n/g,'\n').replace(/\n+/g,' ').replace(/[ \t\f\v]+/g,' ').trim();
+  text = (text||'').replace(/[\r\n]+/g,' ').replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/\u00A0/g,' ').replace(/\s+/g,' ').trim();
+
+  const useCapitalRule = detectCapitalSentenceStyle(text);
   const out = [];
   let i = 0, start = 0;
+
   while (i < text.length) {
     const ch = text[i];
+
+    // ---- Always split on CJK sentence punctuation ----
+    if (/[。！？]/.test(ch)) {
+      let end = i + 1;
+      while (end < text.length && /["'”’)\]\}]/.test(text[end])) end++;
+      const sent = text.slice(start, end).trim();
+      if (sent) out.push(sent);
+      while (end < text.length && text[end] === ' ') end++;
+      i = end;
+      start = end;
+      continue;
+    }
+
+    // ---- English punctuation (. ? !) ----
     if (ch==='.' || ch==='?' || ch==='!') {
-      let j = i-1;
-      while (j>=0 && text[j]===' ') j--;
-      let k = j;
-      while (k>=0 && /[A-Za-z.]/.test(text[k])) k--;
-      const prevToken = text.slice(k+1, j+1);
+
+      // abbreviation protection (for ".")
+      if (ch === '.') {
+        let j = i-1;
+        while (j>=0 && text[j]===' ') j--;
+        let k = j;
+        while (k>=0 && /[A-Za-z.]/.test(text[k])) k--;
+        const prevToken = text.slice(k+1, j+1) + '.';
+        if (ABBREV.includes(prevToken)) {
+          i++;
+          continue;
+        }
+      }
+
+      // look ahead
       let h = i+1;
       while (h<text.length && text[h]===' ') h++;
       while (h<text.length && isOpener(text[h])) h++;
-      const nextIsCapital = h<text.length && /[A-Z]/.test(text[h]);
-      const abbrevHit = ABBREV.includes(prevToken + ch);
-      if (!abbrevHit && nextIsCapital) {
-        const sent = text.slice(start, i+1).trim();
-        if (sent) out.push(sent);
-        i = h; start = i; continue;
+
+      // apply capital rule only if detected style uses it
+      if (useCapitalRule) {
+        if (!(h<text.length && /[A-Z]/.test(text[h]))) {
+          i++;
+          continue;
+        }
       }
+
+      let end = i+1;
+      while (end < text.length && /["'”’)\]\}]/.test(text[end])) end++;
+
+      const sent = text.slice(start, end).trim();
+      if (sent) out.push(sent);
+
+      while (end < text.length && text[end] === ' ') end++;
+      i = end;
+      start = end;
+      continue;
     }
+
     i++;
   }
+
   const tail = text.slice(start).trim();
   if (tail) out.push(tail);
   return out;
