@@ -364,7 +364,6 @@ function renderSentences(){
     box.appendChild(div);
   });
   setActive(0);
-  scaleToFit();
 }
 
 function setActive(newIdx) {
@@ -467,15 +466,6 @@ function startReading() {
   // Render sentences
   renderSentences();
 
-  // ⏱️ Use MutationObserver to wait until sentences are added
-  const target = document.getElementById('sentences');
-  const observer = new MutationObserver((mutationsList, observer) => {
-    if (target.children.length > 0) {
-      observer.disconnect();
-      scaleToFit();
-    }
-  });
-  observer.observe(target, { childList: true });
 }
 
 function advance() {
